@@ -1091,7 +1091,7 @@ button:disabled { opacity: .5; cursor: default; }
     b.forEach((n) => { if (st.away[n]) { zw.appendChild(rosterChip(n, true, H)); nw++; } else { zb.appendChild(rosterChip(n, true, H)); nb++; here++; } });
     if (!na) za.appendChild(mk("span", "ph", "把名字拖到這裡"));
     if (!nb) zb.appendChild(mk("span", "ph", "沒有第二組可以留空，或把名字拖到這裡"));
-    if (!nw) zw.appendChild(mk("span", "ph", "晚到、先走或想休息的人拖到這裡"));
+    if (!nw) zw.appendChild(mk("span", "ph", "本週不參加、晚到、先走或想休息的人拖到這裡"));
     $("c1").textContent = na + " 人"; $("c2").textContent = nb + " 人"; $("c3").textContent = nw + " 人";
     $("att-count").textContent = "出席 " + here + " / " + (a.length + b.length) + " 人";
     $("add-a").textContent = "加到" + L1(); $("add-b").textContent = "加到" + L2();
