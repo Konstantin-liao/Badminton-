@@ -27,6 +27,9 @@
   --warn: #b8470f;
   --ok: #17794f;
   --scrim: rgba(14, 26, 44, .55);
+  --court: #2f8a5c;
+  --court-line: rgba(255, 255, 255, .9);
+  --net: #10261a;
   --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
   --font-mono: "DM Mono", ui-monospace, Menlo, monospace;
 }
@@ -35,14 +38,14 @@
     --bg: #0e151d; --surface: #17212c; --fg: #e7eef6; --muted: #93a4b6; --line: #28374a;
     --accent: #6c9bff; --accent-fg: #08142e; --chip: #e9c93a; --chip-fg: #2b2300; --chip2: #63b9e8; --chip2-fg: #03202f;
     --team: #1e2e47; --sel: #4a3d10; --slip: #232f3d; --admin: #c9a2ff; --admin-bg: #2f2347;
-    --warn: #ff9a66; --ok: #5ed39b; --scrim: rgba(0, 0, 0, .6); color-scheme: dark;
+    --warn: #ff9a66; --ok: #5ed39b; --scrim: rgba(0, 0, 0, .6); --court: #1f5b3e; --court-line: rgba(232, 245, 236, .75); --net: #07130c; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0e151d; --surface: #17212c; --fg: #e7eef6; --muted: #93a4b6; --line: #28374a;
   --accent: #6c9bff; --accent-fg: #08142e; --chip: #e9c93a; --chip-fg: #2b2300; --chip2: #63b9e8; --chip2-fg: #03202f;
   --team: #1e2e47; --sel: #4a3d10; --slip: #232f3d; --admin: #c9a2ff; --admin-bg: #2f2347;
-  --warn: #ff9a66; --ok: #5ed39b; --scrim: rgba(0, 0, 0, .6); color-scheme: dark;
+  --warn: #ff9a66; --ok: #5ed39b; --scrim: rgba(0, 0, 0, .6); --court: #1f5b3e; --court-line: rgba(232, 245, 236, .75); --net: #07130c; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -97,8 +100,18 @@ textarea:focus-visible, input:focus-visible, button:focus-visible, summary:focus
 .lvb { font-family: var(--font-mono); font-size: .75rem; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; line-height: 1.6; flex: none; }
 .nb { font-size: .6875rem; font-weight: 700; color: var(--warn); border: 1px solid var(--warn); border-radius: 6px; padding: 0 4px; line-height: 1.5; flex: none; }
 .lvs { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); font-weight: 500; flex: none; }
-.court .pw { display: block; font-size: .75rem; }
-.court .pw.off { color: var(--warn); }
+.cmap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cmap-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cmap-h .court { min-width: 0; }
+.field { position: relative; width: 100%; max-width: 100%; aspect-ratio: 1340 / 610; background: var(--court); border-radius: 8px; display: grid; grid-template-columns: 1fr 1fr; column-gap: 8px; overflow: hidden; }
+.field svg { position: absolute; inset: 0; width: 100%; height: 100%; color: var(--court-line); }
+.field svg line, .field svg rect { stroke: currentColor; stroke-width: 2px; vector-effect: non-scaling-stroke; fill: none; }
+.field svg .net { stroke: var(--net); stroke-width: 4px; }
+.side { position: relative; z-index: 1; display: flex; flex-direction: column; justify-content: space-around; align-items: center; padding: 2% 4%; min-width: 0; }
+.field .p, .field .slot { background: var(--surface); border-radius: 999px; padding: 3px 10px 3px 3px; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); max-width: 100%; }
+.field .p.sel, .field .p.over { background: var(--sel); }
+.court .pw { font-size: .75rem; margin-left: 8px; }
+.pw.off { color: var(--warn); }
 .lvtbl input[type="number"] { width: 4.5em; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-variant-numeric: tabular-nums; }
 .lvtbl input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); }
 .lvtbl td, .lvtbl th { text-align: center; }
@@ -207,7 +220,7 @@ button:disabled { opacity: .5; cursor: default; }
 .slot .t { color: var(--muted); font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
 .slot.filled .t { color: var(--fg); font-weight: 700; }
 .slot.fresh { animation: fresh .6s ease-out; }
-@keyframes fresh { 0% { background: var(--sel); } 100% { background: transparent; } }
+@keyframes fresh { 0% { box-shadow: 0 0 0 8px var(--sel); transform: scale(1.12); } 100% { box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transform: scale(1); } }
 .rest-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; color: var(--muted); font-size: .9375rem; }
 .rest-row .slot { padding: 2px 6px; }
 .stage-f { padding: 12px 16px 16px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; background: var(--surface); }
@@ -797,20 +810,13 @@ button:disabled { opacity: .5; cursor: default; }
       let no = 0;
       g.matches.forEach((m) => {
         court++;
-        const row = el("div", "match"); row.appendChild(el("div", "court", "場地 " + court));
-        const tm = el("div", "teams");
-        m.forEach((team, ti) => {
-          const tb = el("div", "team");
-          team.forEach((nm) => {
-            no++;
-            const s = el("div", "slot"); const t = el("span", "t", "？");
-            s.appendChild(el("span", "no" + (BS[nm] ? " b" : ""), no)); s.appendChild(t); tb.appendChild(s);
-            slots.push({ name: nm, label: (multi ? g.label + " " : "") + no + " 號", court, node: s, t });
-          });
-          tm.appendChild(tb);
-          if (ti === 0) tm.appendChild(el("div", "vs", "對"));
-        });
-        row.appendChild(tm); board.appendChild(row);
+        board.appendChild(courtMap("場地 " + court, null, m.map((team) => team.map((nm) => {
+          no++;
+          const s = el("div", "slot"); const t = el("span", "t", "？");
+          s.appendChild(el("span", "no" + (BS[nm] ? " b" : ""), no)); s.appendChild(t);
+          slots.push({ name: nm, label: (multi ? g.label + " " : "") + no + " 號", court, node: s, t });
+          return s;
+        }))));
       });
       if (g.bench.length) {
         const rr = el("div", "rest-row"); rr.appendChild(el("span", "", "輪空："));
@@ -943,6 +949,23 @@ button:disabled { opacity: .5; cursor: default; }
   }
 
   // ---------- render ----------
+  const COURT_SVG = '<svg viewBox="0 0 1340 610" preserveAspectRatio="none" aria-hidden="true">' +
+    '<rect x="3" y="3" width="1334" height="604"/>' +
+    '<line x1="0" y1="46" x2="1340" y2="46"/><line x1="0" y1="564" x2="1340" y2="564"/>' +
+    '<line x1="76" y1="0" x2="76" y2="610"/><line x1="1264" y1="0" x2="1264" y2="610"/>' +
+    '<line x1="472" y1="0" x2="472" y2="610"/><line x1="868" y1="0" x2="868" y2="610"/>' +
+    '<line x1="0" y1="305" x2="472" y2="305"/><line x1="868" y1="305" x2="1340" y2="305"/>' +
+    '<line class="net" x1="670" y1="0" x2="670" y2="610"/></svg>';
+  // A doubles court seen from above: team 1 on the left half, team 2 on the right, net in the middle.
+  function courtMap(title, extra, teams) {
+    const w = mk("div", "cmap");
+    const h = mk("div", "cmap-h"); h.appendChild(mk("span", "court", title)); if (extra) h.appendChild(extra);
+    const f = mk("div", "field"); f.setAttribute("role", "group"); f.setAttribute("aria-label", title);
+    f.innerHTML = COURT_SVG;
+    teams.forEach((nodes) => { const side = mk("div", "side"); nodes.forEach((n) => side.appendChild(n)); f.appendChild(side); });
+    w.appendChild(h); w.appendChild(f);
+    return w;
+  }
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   function admBadge() { const s = mk("span", "adm", "管"); s.title = "管理員"; return s; }
 
@@ -988,22 +1011,15 @@ button:disabled { opacity: .5; cursor: default; }
       let no = 0;
       g.matches.forEach((m) => {
         court++;
-        const row = mk("div", "match"); const cEl = mk("div", "court", "場地 " + court); row.appendChild(cEl);
         const lvf = levelFn();
+        let pw = null;
         if (lvf) {
           const t1 = lvf(m[0][0]) + lvf(m[0][1]), t2 = lvf(m[1][0]) + lvf(m[1][1]);
           const approx = m.some((t) => t.some((n) => !(st.levels[n] > 0)));
-          const pw = mk("span", "pw" + (Math.abs(t1 - t2) >= 4 ? " off" : ""), (approx ? "約" : "") + Math.round(t1) + ":" + Math.round(t2));
-          pw.title = "兩隊級數合計"; cEl.appendChild(pw);
+          pw = mk("span", "meta pw" + (Math.abs(t1 - t2) >= 4 ? " off" : ""), "級數 " + (approx ? "約" : "") + Math.round(t1) + " : " + Math.round(t2));
+          pw.title = "兩隊級數合計";
         }
-        const tm = mk("div", "teams");
-        m.forEach((team, idx) => {
-          const tb = mk("div", "team");
-          team.forEach((nm) => tb.appendChild(playerEl(++no, nm, BS[nm], live)));
-          tm.appendChild(tb);
-          if (idx === 0) tm.appendChild(mk("div", "vs", "對"));
-        });
-        row.appendChild(tm); sec.appendChild(row);
+        sec.appendChild(courtMap("場地 " + court, pw, m.map((team) => team.map((nm) => playerEl(++no, nm, BS[nm], live)))));
       });
       if (g.bench.length || live) {
         const b = mk("div", "bench");
@@ -1091,7 +1107,7 @@ button:disabled { opacity: .5; cursor: default; }
     b.forEach((n) => { if (st.away[n]) { zw.appendChild(rosterChip(n, true, H)); nw++; } else { zb.appendChild(rosterChip(n, true, H)); nb++; here++; } });
     if (!na) za.appendChild(mk("span", "ph", "把名字拖到這裡"));
     if (!nb) zb.appendChild(mk("span", "ph", "沒有第二組可以留空，或把名字拖到這裡"));
-    if (!nw) zw.appendChild(mk("span", "ph", "本週不參加、晚到、先走或想休息的人拖到這裡"));
+    if (!nw) zw.appendChild(mk("span", "ph", "晚到、先走或想休息的人拖到這裡"));
     $("c1").textContent = na + " 人"; $("c2").textContent = nb + " 人"; $("c3").textContent = nw + " 人";
     $("att-count").textContent = "出席 " + here + " / " + (a.length + b.length) + " 人";
     $("add-a").textContent = "加到" + L1(); $("add-b").textContent = "加到" + L2();
