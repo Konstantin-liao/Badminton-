@@ -116,6 +116,14 @@ textarea:focus-visible, input:focus-visible, button:focus-visible, summary:focus
 .lvtbl input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); }
 .lvtbl td, .lvtbl th { text-align: center; }
 .lvtbl td:first-child, .lvtbl th:first-child { text-align: left; white-space: normal; }
+.pb { font-size: .6875rem; font-weight: 700; color: var(--ok); border: 1px solid var(--ok); border-radius: 6px; padding: 0 4px; line-height: 1.5; flex: none; }
+.pairs { display: flex; flex-direction: column; gap: 8px; }
+.pair-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.pair-row .who { font-weight: 700; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.pair-row .pn { font-size: .8125rem; color: var(--warn); flex-basis: 100%; }
+.pair-add { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 8px; align-items: center; }
+.pair-add select { width: 100%; min-width: 0; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 8px; }
+@media (max-width: 420px) { .pair-add { grid-template-columns: 1fr auto 1fr; } .pair-add button { grid-column: 1 / -1; } }
 .adm { display: inline-flex; align-items: center; justify-content: center; font-size: .6875rem; font-weight: 700; color: var(--admin); background: var(--admin-bg); border-radius: 6px; padding: 0 5px; line-height: 1.6; flex: none; }
 .act { border: 1px solid var(--accent); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--team); }
 .act-btns { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -309,6 +317,19 @@ button:disabled { opacity: .5; cursor: default; }
       <div class="sub">級數填 1–18（台灣常用的羽球分級，數字越大越強），不確定可以留空，會用大家的平均值計算。每個人最多連續上場 2 輪，打滿 2 輪下一輪一定休息；勾「不連打」的人打 1 輪就休息。</div>
       <div class="tbl-wrap"><table class="lvtbl" id="lvtbl"></table></div>
     </details>
+    <details id="pair-box">
+      <summary id="pair-sum">固定搭檔</summary>
+      <div class="pairs">
+        <div class="sub">設定後，兩人每次上場都會在同一隊，也會一起休息。A組、B組都可以設，一人只能有一位固定搭檔。</div>
+        <div id="pair-list" class="pairs"></div>
+        <div class="pair-add">
+          <select id="p1" aria-label="搭檔一"></select>
+          <span aria-hidden="true">＋</span>
+          <select id="p2" aria-label="搭檔二"></select>
+          <button type="button" class="small-btn" id="p-add">設為搭檔</button>
+        </div>
+      </div>
+    </details>
   </section>
 
   <div class="row"><h2>抽籤結果</h2><button class="small-btn" id="clear" type="button">清除所有紀錄</button></div>
@@ -351,7 +372,7 @@ button:disabled { opacity: .5; cursor: default; }
     g1: "志明\n春嬌\n阿哲\n小芳\n建宏\n雅婷\n俊傑\n怡君\n宗翰\n佩珊",
     g2: "", l1: "A組", l2: "B組", away: {}, admins: { "志明": 1, "雅婷": 1 }, rounds: [],
     levels: { "志明": 9, "春嬌": 5, "阿哲": 12, "小芳": 4, "建宏": 8, "雅婷": 7, "俊傑": 14, "怡君": 3, "宗翰": 10, "佩珊": 6 },
-    noBack: { "怡君": 1 }, balance: true,
+    noBack: { "怡君": 1 }, balance: true, pairs: [],
     wake: false, anim: true, sound: true, adminRule: true
   };
   let selected = null, actName = null, clearArmed = 0;
@@ -362,7 +383,7 @@ button:disabled { opacity: .5; cursor: default; }
     try {
       const s = JSON.parse(localStorage.getItem(KEY) || localStorage.getItem("badminton-v2") || "null");
       if (s && typeof s === "object") st = Object.assign(st, s);
-      st.admins = st.admins || {}; st.away = st.away || {}; st.levels = st.levels || {}; st.noBack = st.noBack || {}; if (st.balance == null) st.balance = true;
+      st.admins = st.admins || {}; st.away = st.away || {}; st.levels = st.levels || {}; st.noBack = st.noBack || {}; if (st.balance == null) st.balance = true; if (!Array.isArray(st.pairs)) st.pairs = [];
     } catch (e) {}
   }
 
@@ -454,14 +475,82 @@ button:disabled { opacity: .5; cursor: default; }
       .map((x) => x.nm);
   }
 
+  // ---------- fixed partners ----------
+  const partnerOf = (n) => { const p = st.pairs.find((q) => q.includes(n)); return p ? (p[0] === n ? p[1] : p[0]) : null; };
+  const isPair = (x, y) => st.pairs.some((q) => (q[0] === x && q[1] === y) || (q[0] === y && q[1] === x));
+  // Partner map limited to people in `names` (both must be present and in the same pool).
+  function partnerMap(names) {
+    const inN = {}; names.forEach((n) => (inN[n] = 1));
+    const m = {};
+    st.pairs.forEach(([x, y]) => { if (inN[x] && inN[y]) { m[x] = y; m[y] = x; } });
+    return m;
+  }
+  // Priority-ordered units: a fixed pair counts as one unit ranked by its less-deserving member.
+  function unitsOf(names, H) {
+    const pm = partnerMap(names), order = priority(names, H), rank = {}, seen = {}, units = [];
+    order.forEach((x, i) => (rank[x] = i));
+    order.forEach((x) => {
+      if (seen[x]) return;
+      const p = pm[x];
+      if (p) { seen[x] = seen[p] = 1; units.push({ m: [x, p], r: Math.max(rank[x], rank[p]) }); }
+      else { seen[x] = 1; units.push({ m: [x], r: rank[x] }); }
+    });
+    return { units: units.sort((a, b) => a.r - b.r), rank };
+  }
+  // Choose n players from names, keeping fixed pairs together; split one pair only if the slots cannot be filled otherwise.
+  function pickWithPairs(names, n, H, broken) {
+    const { units, rank } = unitsOf(names, H);
+    const play = [], skipped = [];
+    for (const u of units) { if (play.length + u.m.length <= n) play.push(...u.m); else skipped.push(u); }
+    if (play.length === n - 1) {
+      const pairU = skipped.find((u) => u.m.length === 2);
+      const pairNames = {}; play.forEach((x) => { if (partnerOf(x) && play.includes(partnerOf(x))) pairNames[x] = 1; });
+      // drop the lowest-priority single who did not sit out last round, and bring the pair in together
+      const drop = play.filter((x) => !pairNames[x] && !H.lastBench[x]).sort((a, b) => rank[b] - rank[a])[0];
+      // ...but only when neither partner has hit the in-a-row limit; otherwise they take their rest
+      if (pairU && drop && !pairU.m.some((x) => tired(x, H))) { play.splice(play.indexOf(drop), 1); play.push(...pairU.m); skipped.splice(skipped.indexOf(pairU), 1); }
+    }
+    for (const u of skipped) {
+      if (play.length >= n) break;
+      if (u.m.length === 2) { const fresh = u.m.filter((x) => !tired(x, H)).sort((a, b) => rank[a] - rank[b]); play.push(fresh[0] || u.m[0]); broken.push(u.m); }
+    }
+    const inP = {}; play.forEach((x) => (inP[x] = 1));
+    const bench = names.filter((x) => !inP[x]).sort((a, b) => rank[a] - rank[b]);
+    return { play, bench };
+  }
+  // Pairs whose two members both ended up in this unit's playing pools.
+  function playingPairs(pools) {
+    const where = {};
+    Object.keys(pools).forEach((c) => pools[c].forEach((n) => (where[n] = c)));
+    return st.pairs.filter(([x, y]) => where[x] && where[y]).map(([x, y]) => [x, y]);
+  }
+
   // Optimise a flat order. cls[i] names the pool position i draws from; swaps only within the same pool.
-  function optimize(pools, cls, H) {
+  // Fixed pairs are placed on a whole team slot first and never swapped apart.
+  function optimize(pools, cls, H, pairs) {
+    pairs = pairs || [];
+    const classOf = {};
+    Object.keys(pools).forEach((c) => pools[c].forEach((n) => (classOf[n] = c)));
+    const teamSlots = cls.length / 2;
     let best = Infinity, cands = [];
-    const idx = {};
-    cls.forEach((c, i) => (idx[c] = idx[c] || []).push(i));
     for (let r = 0; r < RESTARTS; r++) {
-      const order = new Array(cls.length);
-      Object.keys(idx).forEach((c) => { const sh = shuffle(pools[c]); idx[c].forEach((pos, k) => (order[pos] = sh[k])); });
+      const order = new Array(cls.length), fixed = {}, placed = {};
+      shuffle(pairs).forEach(([x, y]) => {
+        const cx = classOf[x], cy = classOf[y];
+        const free = [];
+        for (let t = 0; t < teamSlots; t++) {
+          const i = 2 * t, j = i + 1;
+          if (fixed[i] || fixed[j]) continue;
+          if (cls[i] === cx && cls[j] === cy) free.push([i, j]);
+          else if (cls[i] === cy && cls[j] === cx) free.push([j, i]);
+        }
+        if (!free.length) return;
+        const [i, j] = free[rnd(free.length)];
+        order[i] = x; order[j] = y; fixed[i] = fixed[j] = 1; placed[x] = placed[y] = 1;
+      });
+      const idx = {};
+      cls.forEach((c, i) => { if (!fixed[i]) (idx[c] = idx[c] || []).push(i); });
+      Object.keys(idx).forEach((c) => { const sh = shuffle(pools[c].filter((n) => !placed[n])); idx[c].forEach((pos, k) => (order[pos] = sh[k])); });
       let s = score(order, H), improved = true, guard = 0;
       while (improved && s > 0 && guard++ < 50) {
         improved = false;
@@ -489,26 +578,26 @@ button:disabled { opacity: .5; cursor: default; }
   function repeats(matches, H) {
     let rp = 0, ro = 0;
     matches.forEach((m) => {
-      m.forEach((t) => { if (H.P[key(t[0], t[1])]) rp++; });
+      m.forEach((t) => { if (H.P[key(t[0], t[1])] && !isPair(t[0], t[1])) rp++; });
       m[0].forEach((a) => m[1].forEach((b) => { if (H.O[key(a, b)]) ro++; }));
     });
     return { rp, ro };
   }
 
   // A "unit" is one independently numbered group: pools of players by slot class, plus its bench.
-  function plainUnit(label, names, c, H) {
-    const pr = priority(names, H);
-    const play = pr.slice(0, c * 4);
-    return { label, pools: { x: play }, cls: play.map(() => "x"), bench: pr.slice(c * 4), allow: () => true };
+  function plainUnit(label, names, c, H, broken) {
+    const { play, bench } = pickWithPairs(names, c * 4, H, broken);
+    return { label, pools: { x: play }, cls: play.map(() => "x"), bench, allow: () => true };
   }
 
   function buildUnits(H) {
     const { A, B } = present();
+    const broken = [];
     const lim = st.courts || Infinity;
     if (st.mode === "mix" || (!B.length && st.mode === "cross")) {
       const all = A.concat(B), c = Math.min(Math.floor(all.length / 4), lim);
       if (!c) return { err: "目前出席 " + all.length + " 人，至少要 4 人才能開一場。" };
-      return { units: [plainUnit("全部", all, c, H)] };
+      return { units: [plainUnit("全部", all, c, H, broken)], broken };
     }
     if (st.mode === "sep") {
       const gs = [{ label: L1(), names: A, c: 0 }, { label: L2(), names: B, c: 0 }].filter((g) => g.names.length);
@@ -522,24 +611,45 @@ button:disabled { opacity: .5; cursor: default; }
         open.sort((x, y) => (y.names.length - 4 * y.c) - (x.names.length - 4 * x.c));
         open[0].c++; left--;
       }
-      return { units: gs.filter((g) => g.c).map((g) => plainUnit(g.label, g.names, g.c, H)) };
+      return { units: gs.filter((g) => g.c).map((g) => plainUnit(g.label, g.names, g.c, H, broken)), broken };
     }
     // cross: each team = one from A + one from B; leftovers form extra courts
     const inA = {}; A.forEach((x) => (inA[x] = 1));
-    const PA = priority(A, H), PB = priority(B, H);
     const c = Math.min(Math.floor(A.length / 2), Math.floor(B.length / 2), lim);
-    const restAll = priority(PA.slice(2 * c).concat(PB.slice(2 * c)), H);
-    const extra = Math.min(Math.floor(restAll.length / 4), lim - c);
+    const { units: us } = unitsOf(A.concat(B), H);
+    const pa = [], pb = [], left = [];
+    let na = 2 * c, nb = 2 * c;
+    for (const u of us) {
+      if (u.m.length === 1) {
+        const x = u.m[0];
+        if (inA[x] && na) { pa.push(x); na--; } else if (!inA[x] && nb) { pb.push(x); nb--; } else left.push(u);
+      } else {
+        const [x, y] = u.m;
+        if (inA[x] !== inA[y] && na && nb) { pa.push(inA[x] ? x : y); pb.push(inA[x] ? y : x); na--; nb--; }
+        else left.push(u);
+      }
+    }
+    // could not fill with pairs intact: split pairs as needed
+    for (const u of left.slice()) {
+      if (!na && !nb) break;
+      if (u.m.length !== 2) continue;
+      let took = false;
+      u.m.forEach((x) => { if (inA[x] && na) { pa.push(x); na--; took = true; } else if (!inA[x] && nb) { pb.push(x); nb--; took = true; } });
+      if (took) { broken.push(u.m); left.splice(left.indexOf(u), 1, ...u.m.filter((x) => !pa.includes(x) && !pb.includes(x)).map((x) => ({ m: [x] }))); }
+    }
+    const restNames = [].concat(...left.map((u) => u.m));
+    const extra = Math.min(Math.floor(restNames.length / 4), lim - c);
     if (!c && !extra) return { err: "出席人數不足，交叉搭檔每組至少要 2 人。" };
+    const px = pickWithPairs(restNames, extra * 4, H, broken);
     const cls = [];
     for (let i = 0; i < c; i++) cls.push("a", "b", "a", "b");
     for (let i = 0; i < extra * 4; i++) cls.push("x");
     return { units: [{
       label: "交叉搭檔", cls,
-      pools: { a: PA.slice(0, 2 * c), b: PB.slice(0, 2 * c), x: restAll.slice(0, extra * 4) },
-      bench: restAll.slice(extra * 4),
+      pools: { a: pa, b: pb, x: px.play },
+      bench: px.bench,
       allow: (k, n) => k === "x" || (k === "a" ? !!inA[n] : !inA[n])
-    }] };
+    }], broken };
   }
 
   // Make sure at least one admin sits out (when 2+ admins are present). Returns a status string.
@@ -553,7 +663,9 @@ button:disabled { opacity: .5; cursor: default; }
       for (const u of units) {
         const k = Object.keys(u.pools).find((c) => u.pools[c].includes(a));
         if (!k) continue;
-        const b = u.bench.find((n) => !isAdmin(n) && !tired(n, H) && u.allow(k, n));
+        const pa = partnerOf(a);
+        if (pa && Object.values(u.pools).some((pl) => pl.includes(pa))) continue; // would split a fixed pair
+        const b = u.bench.find((n) => !isAdmin(n) && !tired(n, H) && !partnerOf(n) && u.allow(k, n));
         if (!b) continue;
         u.pools[k][u.pools[k].indexOf(a)] = b;
         u.bench[u.bench.indexOf(b)] = a;
@@ -571,7 +683,7 @@ button:disabled { opacity: .5; cursor: default; }
     const adm = fixAdmins(res.units, H);
     const forced = [].concat(...res.units.map((u) => [].concat(...Object.values(u.pools)))).filter((n) => tired(n, H));
     const groups = res.units.map((u) => {
-      const matches = toMatches(optimize(u.pools, u.cls, H));
+      const matches = toMatches(optimize(u.pools, u.cls, H, playingPairs(u.pools)));
       return Object.assign({ label: u.label, matches, bench: u.bench.slice() }, repeats(matches, H));
     });
     $("msg").textContent = ""; $("msg").className = "msg";
@@ -580,7 +692,8 @@ button:disabled { opacity: .5; cursor: default; }
     selected = null;
     save(); render();
     const warns = [];
-    if (forced.length) warns.push("人數不夠湊滿場地，「" + forced.join("、") + "」這輪超過連打上限。");
+    if (res.broken && res.broken.length) warns.push("人數湊不剛好，這輪「" + res.broken.map((p) => p.join("、")).join("」「") + "」沒辦法同隊。");
+    if (forced.length && capFeasible()) warns.push("人數不夠湊滿場地，「" + forced.join("、") + "」這輪超過連打上限。");
     if (adm === "fail") warns.push("這輪所有人都要上場，沒辦法留管理員在場下。");
     if (warns.length) fail(warns.join(" "));
     if (animate && st.anim) openStage(r);
@@ -1065,11 +1178,61 @@ button:disabled { opacity: .5; cursor: default; }
     if (st.levels[n] > 0) bt.appendChild(mk("span", "lvb", st.levels[n] + "級"));
     if (isAdmin(n)) bt.appendChild(admBadge());
     if (st.noBack[n]) bt.appendChild(mk("span", "nb", "不連打"));
+    if (partnerOf(n)) { const pb = mk("span", "pb", "搭" + partnerOf(n)); pb.title = "固定搭檔：" + partnerOf(n); bt.appendChild(pb); }
     bt.appendChild(mk("span", "cnt", (H.G[n] || 0) + "場"));
     bt.setAttribute("aria-label", n + (isAdmin(n) ? "，管理員" : "") + "，已上場 " + (H.G[n] || 0) + " 次");
     bt.addEventListener("click", () => { if (!tapped()) return; actName = actName === n ? null : n; renderAtt(); });
     draggable(bt, { kind: "roster", name: n });
     return bt;
+  }
+
+  function groupLabel(n) { const { a, b } = lists(); return a.includes(n) ? L1() : b.includes(n) ? L2() : null; }
+  function pairNote(x, y) {
+    const gx = groupLabel(x), gy = groupLabel(y);
+    if (!gx || !gy) return "名單裡找不到其中一位，這組搭檔暫時不會生效";
+    if (st.away[x] || st.away[y]) return "其中一位暫停中，另一位會單獨上場";
+    if (st.mode === "sep" && gx !== gy) return "「兩組分開抽」時，不同組的兩人沒辦法同隊";
+    if (st.mode === "cross" && gx === gy) return "「交叉搭檔」時，同組的兩人只有在多湊出來的場地才能同隊";
+    return "";
+  }
+  function setPair(x, y) {
+    st.pairs = st.pairs.filter((q) => !q.includes(x) && !q.includes(y));
+    if (y) st.pairs.push([x, y]);
+    save(); render();
+  }
+  function renderPairs() {
+    const { a, b } = lists(), list = $("pair-list");
+    list.innerHTML = "";
+    $("pair-sum").textContent = "固定搭檔" + (st.pairs.length ? "（" + st.pairs.length + " 組）" : "");
+    if (!st.pairs.length) list.appendChild(mk("div", "hint", "還沒有固定搭檔。用下面的選單選兩個人。"));
+    st.pairs.forEach(([x, y]) => {
+      const row = mk("div", "pair-row");
+      const who = mk("div", "who");
+      who.appendChild(mk("span", "", x)); who.appendChild(mk("span", "sub", "＋")); who.appendChild(mk("span", "", y));
+      const gx = groupLabel(x), gy = groupLabel(y);
+      if (gx && gy) who.appendChild(mk("span", "meta", gx === gy ? gx : gx + "＋" + gy));
+      row.appendChild(who);
+      const rm = mk("button", "small-btn", "解除"); rm.type = "button";
+      rm.addEventListener("click", () => { setPair(x, null); flash("已解除「" + x + "」和「" + y + "」的搭檔"); });
+      row.appendChild(rm);
+      const note = pairNote(x, y);
+      if (note) row.appendChild(mk("div", "pn", note));
+      list.appendChild(row);
+    });
+    // pickers: only people without a partner
+    [["p1", "選第一位"], ["p2", "選第二位"]].forEach(([id, ph]) => {
+      const sel = $(id), keep = sel.value;
+      sel.innerHTML = "";
+      const o0 = mk("option", "", ph); o0.value = ""; sel.appendChild(o0);
+      [[L1(), a], [L2(), b]].forEach(([lab, names]) => {
+        const free = names.filter((n) => !partnerOf(n));
+        if (!free.length) return;
+        const og = document.createElement("optgroup"); og.label = lab;
+        free.forEach((n) => { const o = mk("option", "", n); o.value = n; og.appendChild(o); });
+        sel.appendChild(og);
+      });
+      if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+    });
   }
 
   function renderLvTable() {
@@ -1135,12 +1298,14 @@ button:disabled { opacity: .5; cursor: default; }
     stp.appendChild(minus); stp.appendChild(out); stp.appendChild(plus); lvRow.appendChild(stp);
     box.appendChild(lvRow);
     add(st.noBack[n] ? "取消不連打" : "設為不連打", () => { if (st.noBack[n]) delete st.noBack[n]; else st.noBack[n] = 1; save(); renderAtt(); renderLvTable(); });
+    if (partnerOf(n)) add("解除與" + partnerOf(n) + "的搭檔", () => { const q = partnerOf(n); setPair(n, null); flash("已解除「" + n + "」和「" + q + "」的搭檔"); });
+    else add("設定固定搭檔", () => { $("pair-box").open = true; renderPairs(); $("p1").value = n; $("p2").focus(); $("pair-box").scrollIntoView({ block: "center" }); });
     add(isAdmin(n) ? "取消管理員" : "設為管理員", () => { if (isAdmin(n)) delete st.admins[n]; else st.admins[n] = 1; save(); render(); });
     add(st.away[n] ? "恢復出席" : "暫停", () => { dropOnZone(st.away[n] ? (inA ? "a" : "b") : "away", { name: n }); });
     add("移到" + (inA ? L2() : L1()), () => { dropOnZone(inA ? "b" : "a", { name: n }); });
     add("從名單移除", () => {
       setLists(a.filter((x) => x !== n), b.filter((x) => x !== n));
-      delete st.admins[n]; delete st.away[n];
+      delete st.admins[n]; delete st.away[n]; st.pairs = st.pairs.filter((q) => !q.includes(n));
       if (locate(n)) pullFromRound(n);
       actName = null; save(); render(); flash("已移除「" + n + "」");
     }, "danger");
@@ -1148,12 +1313,20 @@ button:disabled { opacity: .5; cursor: default; }
     box.appendChild(btns);
   }
 
+  // With b people sitting out each round, everyone can rest at least once every 3 rounds only if 3*b >= n.
+  function capFeasible() {
+    const { A, B } = present(), lim = st.courts || Infinity;
+    const groups = st.mode === "sep" ? [A.length, B.length].filter((x) => x) : [A.length + B.length];
+    let left = lim;
+    return groups.every((n) => { const c = Math.min(Math.floor(n / 4), left); left -= c; return 3 * (n - 4 * c) >= n; });
+  }
   function renderNotes() {
     const { A, B } = present();
     const need = st.mode === "sep" ? Math.floor(A.length / 4) + Math.floor(B.length / 4) : Math.floor((A.length + B.length) / 4);
     const use = st.courts ? Math.min(st.courts, need) : need;
     const total = A.length + B.length;
-    $("court-note").textContent = "出席 " + total + " 人，每輪開 " + use + " 面場地、" + Math.max(0, total - use * 4) + " 人輪空";
+    $("court-note").textContent = "出席 " + total + " 人，每輪開 " + use + " 面場地、" + Math.max(0, total - use * 4) + " 人輪空" +
+      (use && !capFeasible() ? "。輪空的人太少，沒辦法做到每人最多連打 2 輪，會讓連打最久的人先休息（可以減少場地數）" : "");
     $("cv").textContent = st.courts ? st.courts + " 面" : "不限";
     const adm = A.concat(B).filter(isAdmin);
     let t;
@@ -1186,7 +1359,7 @@ button:disabled { opacity: .5; cursor: default; }
       cross: "每隊固定一位" + l1 + "搭一位" + l2 + "（例如老手帶新手）。兩組人數對不齊時，多出來的人會另外湊一場或輪空。"
     }[st.mode];
     $("redo").disabled = st.rounds.length === 0;
-    renderAtt(); renderLvTable(); renderRounds(); renderStats();
+    renderAtt(); renderLvTable(); renderPairs(); renderRounds(); renderStats();
   }
 
   // ---------- wake lock ----------
@@ -1213,6 +1386,13 @@ button:disabled { opacity: .5; cursor: default; }
   $("o-anim").addEventListener("change", () => { st.anim = $("o-anim").checked; save(); });
   $("o-sound").addEventListener("change", () => { st.sound = $("o-sound").checked; save(); });
   $("o-admin").addEventListener("change", () => { st.adminRule = $("o-admin").checked; save(); renderNotes(); });
+  $("p-add").addEventListener("click", () => {
+    const x = $("p1").value, y = $("p2").value;
+    if (!x || !y) { fail("請選兩個人。"); return; }
+    if (x === y) { fail("請選兩個不同的人。"); return; }
+    setPair(x, y); $("p1").value = ""; $("p2").value = "";
+    flash("「" + x + "」和「" + y + "」設為固定搭檔");
+  });
   $("o-bal").addEventListener("change", () => { st.balance = $("o-bal").checked; save(); });
   droppable($("z-a"), (d) => dropOnZone("a", d));
   droppable($("z-b"), (d) => dropOnZone("b", d));
