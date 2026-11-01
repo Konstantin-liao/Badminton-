@@ -156,6 +156,13 @@ button.p { cursor: grab; touch-action: pan-y; -webkit-touch-callout: none; user-
 .bench { color: var(--muted); font-size: .9375rem; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; border-radius: 10px; padding: 4px; min-height: 40px; }
 .bench.over { background: var(--team); outline: 2px dashed var(--accent); }
 .bench .p { font-weight: 500; color: var(--fg); }
+.live-list { display: flex; flex-direction: column; gap: 8px; }
+.live-row { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.live-row .lc { font-family: var(--font-mono); font-size: .8125rem; color: var(--muted); }
+.live-row .lt { font-weight: 700; overflow-wrap: anywhere; min-width: 0; }
+.live-row .small-btn { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 700; white-space: nowrap; }
+.live-wait-list { font-size: .875rem; color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 420px) { .live-row { grid-template-columns: 1fr; } }
 .rep { font-size: .8125rem; }
 .rep.good { color: var(--ok); }
 .rep.bad { color: var(--warn); }
@@ -332,6 +339,13 @@ button:disabled { opacity: .5; cursor: default; }
     </details>
   </section>
 
+  <section class="panel" id="live" hidden>
+    <div class="row"><h2>場上狀況</h2><span class="meta" id="live-wait"></span></div>
+    <div class="hint">哪一面場先打完，就按那面場的「打完了」，由等待的人和剛下場的人抽下一場，其他場地繼續打。</div>
+    <div id="live-list" class="live-list"></div>
+    <div id="live-waiting" class="live-wait-list"></div>
+  </section>
+
   <div class="row"><h2>抽籤結果</h2><button class="small-btn" id="clear" type="button">清除所有紀錄</button></div>
   <div id="rounds"></div>
 
@@ -424,28 +438,32 @@ button:disabled { opacity: .5; cursor: default; }
 
   // History: weighted partner/opponent counts (last round counts double), games, rests, last bench
   function history(rs) {
-    const P = {}, O = {}, G = {}, R = {}, lastBench = {}, lastPlay = {}, partners = {}, att = {};
+    const P = {}, O = {}, G = {}, R = {}, lastBench = {}, lastPlay = {}, partners = {}, att = {}, last = {};
     let streak = {};
     rs.forEach((r, i) => {
       const w = i === rs.length - 1 ? 2 : 1;
+      // People still playing on another court during a single-court draw keep their streak untouched.
       const next = {};
+      (r.busy || []).forEach((n) => { if (streak[n]) next[n] = streak[n]; });
       r.groups.forEach((g) => {
-        g.matches.forEach((m) => m.forEach((t) => t.forEach((n) => { next[n] = (streak[n] || 0) + 1; att[n] = (att[n] || 0) + 1; })));
-        g.bench.forEach((n) => { att[n] = (att[n] || 0) + 1; });
+        g.matches.forEach((m) => m.forEach((t) => t.forEach((n) => { next[n] = (streak[n] || 0) + 1; att[n] = (att[n] || 0) + 1; last[n] = "play"; })));
+        g.bench.forEach((n) => { att[n] = (att[n] || 0) + 1; last[n] = "bench"; });
       });
       streak = next;
       r.groups.forEach((g) => {
-        g.bench.forEach((n) => { R[n] = (R[n] || 0) + 1; if (i === rs.length - 1) lastBench[n] = 1; });
+        g.bench.forEach((n) => { R[n] = (R[n] || 0) + 1; });
         g.matches.forEach((m) => {
           m.forEach((t) => {
             const k = key(t[0], t[1]);
             P[k] = (P[k] || 0) + w;
-            t.forEach((n, j) => { G[n] = (G[n] || 0) + 1; if (i === rs.length - 1) lastPlay[n] = 1; (partners[n] = partners[n] || {})[t[1 - j]] = 1; });
+            t.forEach((n, j) => { G[n] = (G[n] || 0) + 1; (partners[n] = partners[n] || {})[t[1 - j]] = 1; });
           });
           m[0].forEach((a) => m[1].forEach((b) => { const k = key(a, b); O[k] = (O[k] || 0) + w; }));
         });
       });
     });
+    // "Sat out last time" = sat out in the last draw that person took part in.
+    Object.keys(last).forEach((n) => { if (last[n] === "bench") lastBench[n] = 1; else lastPlay[n] = 1; });
     return { P, O, G, R, lastBench, lastPlay, partners, streak, att };
   }
 
@@ -590,10 +608,10 @@ button:disabled { opacity: .5; cursor: default; }
     return { label, pools: { x: play }, cls: play.map(() => "x"), bench, allow: () => true };
   }
 
-  function buildUnits(H) {
-    const { A, B } = present();
+  function buildUnits(H, pool) {
+    const { A, B } = pool || present();
     const broken = [];
-    const lim = st.courts || Infinity;
+    const lim = pool ? pool.lim : st.courts || Infinity;
     if (st.mode === "mix" || (!B.length && st.mode === "cross")) {
       const all = A.concat(B), c = Math.min(Math.floor(all.length / 4), lim);
       if (!c) return { err: "目前出席 " + all.length + " 人，至少要 4 人才能開一場。" };
@@ -675,11 +693,18 @@ button:disabled { opacity: .5; cursor: default; }
     return "fail";
   }
 
-  function doDraw(animate) {
-    const H = history(st.rounds);
-    if (st.balance) { const lv = levelFn(); if (lv) { H.lv = lv; H.lw = 3; } }
-    const res = buildUnits(H);
-    if (res.err) return fail(res.err);
+  // What is on each court right now: a full draw sets every court, a single-court draw replaces one.
+  function courtBoard() {
+    let board = [];
+    st.rounds.forEach((r) => {
+      if (r.court) { const g = r.groups[0]; if (g && g.matches[0]) board[r.court - 1] = { m: g.matches[0], label: g.label, no: r.no }; }
+      else { board = []; r.groups.forEach((g) => g.matches.forEach((m) => board.push({ m, label: g.label, no: r.no }))); }
+    });
+    return board;
+  }
+  const roundTitle = (r) => "第 " + r.no + " 輪" + (r.court ? "・場地 " + r.court : "");
+
+  function finishDraw(res, H, extra, animate) {
     const adm = fixAdmins(res.units, H);
     const forced = [].concat(...res.units.map((u) => [].concat(...Object.values(u.pools)))).filter((n) => tired(n, H));
     const groups = res.units.map((u) => {
@@ -687,17 +712,49 @@ button:disabled { opacity: .5; cursor: default; }
       return Object.assign({ label: u.label, matches, bench: u.bench.slice() }, repeats(matches, H));
     });
     $("msg").textContent = ""; $("msg").className = "msg";
-    const r = { no: st.rounds.length + 1, groups };
+    const r = Object.assign({ no: st.rounds.length + 1, groups }, extra || {});
     st.rounds.push(r);
     selected = null;
     save(); render();
     const warns = [];
     if (res.broken && res.broken.length) warns.push("人數湊不剛好，這輪「" + res.broken.map((p) => p.join("、")).join("」「") + "」沒辦法同隊。");
-    if (forced.length && capFeasible()) warns.push("人數不夠湊滿場地，「" + forced.join("、") + "」這輪超過連打上限。");
-    if (adm === "fail") warns.push("這輪所有人都要上場，沒辦法留管理員在場下。");
+    if (forced.length && capFeasible()) warns.push("等待的人不夠，「" + forced.join("、") + "」這場超過連打上限。");
+    if (adm === "fail") warns.push("這輪沒辦法留管理員在場下。");
     if (warns.length) fail(warns.join(" "));
     if (animate && st.anim) openStage(r);
     return true;
+  }
+
+  // Court k has finished: draw one new match from everyone who is not playing on another court.
+  function drawCourt(k, animate) {
+    const board = courtBoard(), slot = board[k - 1];
+    if (!slot) return fail("找不到場地 " + k + "。");
+    const busy = [];
+    board.forEach((b, i) => { if (b && i !== k - 1) b.m.forEach((t) => busy.push(...t)); });
+    const busySet = {}; busy.forEach((n) => (busySet[n] = 1));
+    const H = history(st.rounds);
+    if (st.balance) { const lv = levelFn(); if (lv) { H.lv = lv; H.lw = 3; } }
+    const { A, B } = present();
+    let a = A.filter((n) => !busySet[n]), b = B.filter((n) => !busySet[n]);
+    // in "分開抽", a court keeps serving the group it was drawn for
+    if (st.mode === "sep") { if (slot.label === L2()) a = []; else if (slot.label === L1()) b = []; }
+    // someone whose fixed partner is still playing waits for them, if there are enough other people
+    const waitsForPartner = (n) => partnerOf(n) && busySet[partnerOf(n)];
+    const tryBuild = (aa, bb) => { const res = buildUnits(H, { A: aa, B: bb, lim: 1 }); return res.err || !res.units || !res.units.length || !res.units[0].cls.length ? null : res; };
+    const held = a.concat(b).filter(waitsForPartner);
+    let res = held.length ? tryBuild(a.filter((n) => !waitsForPartner(n)), b.filter((n) => !waitsForPartner(n))) : null;
+    if (res) res.units[0].bench.push(...held);
+    else res = tryBuild(a, b);
+    if (!res) return fail("場地 " + k + " 可以上場的人不到 4 位（其他人還在別的場地打）。");
+    return finishDraw(res, H, { court: k, busy }, animate);
+  }
+
+  function doDraw(animate) {
+    const H = history(st.rounds);
+    if (st.balance) { const lv = levelFn(); if (lv) { H.lv = lv; H.lw = 3; } }
+    const res = buildUnits(H);
+    if (res.err) return fail(res.err);
+    return finishDraw(res, H, null, animate);
   }
   // Level lookup: unknown levels use the average of the known ones among people present.
   function levelFn() {
@@ -894,10 +951,10 @@ button:disabled { opacity: .5; cursor: default; }
     const BS = bSet(), multi = r.groups.length > 1;
     const slots = [];
     const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
-    const root = el("div", "stage"); root.setAttribute("role", "dialog"); root.setAttribute("aria-modal", "true"); root.setAttribute("aria-label", "第 " + r.no + " 輪抽籤");
+    const root = el("div", "stage"); root.setAttribute("role", "dialog"); root.setAttribute("aria-modal", "true"); root.setAttribute("aria-label", roundTitle(r) + " 抽籤");
     const box = el("div", "stage-in");
 
-    const hd = el("div", "stage-h"); hd.appendChild(el("h2", "", "第 " + r.no + " 輪抽籤"));
+    const hd = el("div", "stage-h"); hd.appendChild(el("h2", "", roundTitle(r) + " 抽籤"));
     const hr = el("div", "hd-r"); const prog = el("span", "meta"); const all = el("button", "small-btn", "全部揭曉"); all.type = "button";
     hr.appendChild(prog); hr.appendChild(all); hd.appendChild(hr);
 
@@ -917,7 +974,7 @@ button:disabled { opacity: .5; cursor: default; }
     [lead, nameEl, show, go, skip, queue].forEach((x) => hand.appendChild(x));
 
     const board = el("div", "board"); board.style.paddingTop = "12px";
-    let court = 0;
+    let court = r.court ? r.court - 1 : 0;
     r.groups.forEach((g) => {
       if (multi) board.appendChild(el("div", "gname", g.label));
       let no = 0;
@@ -1042,8 +1099,8 @@ button:disabled { opacity: .5; cursor: default; }
 
   // ---------- copy ----------
   function roundText(r) {
-    const lines = ["第 " + r.no + " 輪"];
-    let court = 0;
+    const lines = [roundTitle(r)];
+    let court = r.court ? r.court - 1 : 0;
     r.groups.forEach((g) => {
       if (r.groups.length > 1) lines.push("【" + g.label + "】");
       g.matches.forEach((m) => { court++; lines.push("場地" + court + "：" + m[0].join("、") + " 對 " + m[1].join("、")); });
@@ -1101,7 +1158,7 @@ button:disabled { opacity: .5; cursor: default; }
   function renderRound(r, live, BS) {
     const card = mk("div", "round" + (live ? " latest" : ""));
     const h = mk("div", "round-h");
-    h.appendChild(mk("h2", "", "第 " + r.no + " 輪" + (r.edited ? "（手動調整過）" : "")));
+    h.appendChild(mk("h2", "", roundTitle(r) + (r.edited ? "（手動調整過）" : "")));
     let rp = 0, ro = 0;
     r.groups.forEach((g) => { rp += g.rp || 0; ro += g.ro || 0; });
     h.appendChild(mk("span", "rep " + (rp + ro === 0 ? "good" : "bad"),
@@ -1117,7 +1174,7 @@ button:disabled { opacity: .5; cursor: default; }
         : mk("div", "adm-note bad", "這輪管理員都在場上"));
     }
 
-    let court = 0;
+    let court = r.court ? r.court - 1 : 0;
     r.groups.forEach((g, gi) => {
       const sec = mk("div"); sec.style.cssText = "display:flex;flex-direction:column;gap:10px;min-width:0";
       if (r.groups.length > 1) sec.appendChild(mk("div", "gname", g.label));
@@ -1136,7 +1193,7 @@ button:disabled { opacity: .5; cursor: default; }
       });
       if (g.bench.length || live) {
         const b = mk("div", "bench");
-        b.appendChild(document.createTextNode(g.bench.length ? "本輪輪空：" : "本輪沒有人輪空"));
+        b.appendChild(document.createTextNode(r.court ? (g.bench.length ? "繼續等待：" : "沒有人在等待") : (g.bench.length ? "本輪輪空：" : "本輪沒有人輪空")));
         g.bench.forEach((nm) => b.appendChild(playerEl(null, nm, BS[nm], live)));
         if (live) droppable(b, (src) => dropOnBench(gi, src));
         sec.appendChild(b);
@@ -1159,7 +1216,32 @@ button:disabled { opacity: .5; cursor: default; }
     return card;
   }
 
+  function renderLive() {
+    const board = courtBoard(), box = $("live-list");
+    $("live").hidden = !board.some(Boolean);
+    box.innerHTML = "";
+    const on = {};
+    board.forEach((b, i) => {
+      if (!b) return;
+      b.m.forEach((t) => t.forEach((n) => (on[n] = 1)));
+      const row = mk("div", "live-row");
+      const info = mk("div");
+      info.appendChild(mk("div", "lc", "場地 " + (i + 1) + "・第 " + b.no + " 輪抽出" + (st.mode === "sep" && b.label !== "全部" ? "・" + b.label : "")));
+      info.appendChild(mk("div", "lt", b.m[0].join("、") + "　對　" + b.m[1].join("、")));
+      row.appendChild(info);
+      const bt = mk("button", "small-btn", "打完了，抽下一場"); bt.type = "button";
+      bt.addEventListener("click", () => { audio(); drawCourt(i + 1, true); });
+      row.appendChild(bt);
+      box.appendChild(row);
+    });
+    const { A, B } = present();
+    const waiting = A.concat(B).filter((n) => !on[n]);
+    $("live-wait").textContent = "場邊等待 " + waiting.length + " 人";
+    $("live-waiting").textContent = waiting.length ? "等待中：" + waiting.join("、") : "";
+  }
+
   function renderRounds() {
+    renderLive();
     const BS = bSet(), box = $("rounds");
     box.innerHTML = "";
     if (!st.rounds.length) {
@@ -1359,6 +1441,7 @@ button:disabled { opacity: .5; cursor: default; }
       cross: "每隊固定一位" + l1 + "搭一位" + l2 + "（例如老手帶新手）。兩組人數對不齊時，多出來的人會另外湊一場或輪空。"
     }[st.mode];
     $("redo").disabled = st.rounds.length === 0;
+    $("draw").textContent = st.rounds.length ? "全部場地一起抽" : "抽下一輪";
     renderAtt(); renderLvTable(); renderPairs(); renderRounds(); renderStats();
   }
 
@@ -1412,7 +1495,8 @@ button:disabled { opacity: .5; cursor: default; }
   $("redo").addEventListener("click", () => {
     if (!st.rounds.length) return;
     const removed = st.rounds.pop();
-    if (!doDraw(true)) { st.rounds.push(removed); render(); }
+    const ok = removed.court ? drawCourt(removed.court, true) : doDraw(true);
+    if (!ok) { st.rounds.push(removed); render(); }
   });
   function armedReset(btn, label) {
     let armed = 0;
