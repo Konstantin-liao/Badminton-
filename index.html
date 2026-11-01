@@ -162,6 +162,7 @@ button.p { cursor: grab; touch-action: pan-y; -webkit-touch-callout: none; user-
 .live-row .lt { font-weight: 700; overflow-wrap: anywhere; min-width: 0; }
 .live-row .small-btn { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 700; white-space: nowrap; }
 .live-wait-list { font-size: .875rem; color: var(--muted); overflow-wrap: anywhere; }
+.live-row.off { opacity: .6; }
 @media (max-width: 420px) { .live-row { grid-template-columns: 1fr; } }
 .rep { font-size: .8125rem; }
 .rep.good { color: var(--ok); }
@@ -341,7 +342,7 @@ button:disabled { opacity: .5; cursor: default; }
 
   <section class="panel" id="live" hidden>
     <div class="row"><h2>場上狀況</h2><span class="meta" id="live-wait"></span></div>
-    <div class="hint">哪一面場先打完，就按那面場的「打完了」，由等待的人和剛下場的人抽下一場，其他場地繼續打。</div>
+    <div class="hint">哪一面場先打完就按「打完了」，程式會把下一輪整輪排好，先讓場下的人抽；還在打的人等他們那面場打完再按一次，換他們抽。</div>
     <div id="live-list" class="live-list"></div>
     <div id="live-waiting" class="live-wait-list"></div>
   </section>
@@ -693,6 +694,53 @@ button:disabled { opacity: .5; cursor: default; }
     return "fail";
   }
 
+  // ---------- drawing the next round while some courts are still playing ----------
+  function namesIn(r) { const out = []; r.groups.forEach((g) => { g.matches.forEach((m) => m.forEach((t) => out.push(...t))); out.push(...g.bench); }); return out; }
+  function courtsOf(r) { const out = []; r.groups.forEach((g) => g.matches.forEach((m) => out.push({ m, label: g.label }))); return out; }
+  // A round is "pending" while some of its people have not drawn their slip yet.
+  const isPending = (r) => !!r && Array.isArray(r.revealed) && namesIn(r).some((n) => !r.revealed.includes(n));
+  const pendingRound = () => (isPending(latest()) ? latest() : null);
+  // The round being played on court right now.
+  const playingRound = () => (pendingRound() ? st.rounds[st.rounds.length - 2] || null : latest() || null);
+  const finishedOf = (P) => (P && Array.isArray(P.finished) ? P.finished : []);
+  function stillPlaying(P) {
+    const fin = finishedOf(P), on = [];
+    if (!P) return on;
+    courtsOf(P).forEach((c, i) => { if (!fin.includes(i + 1)) c.m.forEach((t) => on.push(...t)); });
+    return on;
+  }
+  // People in the pending round who are off court and have not drawn yet.
+  function freeToDraw(N, P) {
+    const busy = {}; stillPlaying(P).forEach((n) => (busy[n] = 1));
+    return namesIn(N).filter((n) => !busy[n] && !N.revealed.includes(n));
+  }
+  function letThemDraw(N, names) {
+    if (!names.length) { flash("場下的人都抽過了，還在打的人打完後，按他們場地的「打完了」。"); return; }
+    if (st.anim) openStage(N, names);
+    else { N.revealed.push(...names); save(); render(); flash("已幫 " + names.length + " 人抽好籤。"); }
+  }
+  // Court k of the playing round has finished.
+  function courtFinished(k) {
+    const P = playingRound(); if (!P) return;
+    P.finished = finishedOf(P).slice();
+    if (!P.finished.includes(k)) P.finished.push(k);
+    let N = pendingRound();
+    if (!N) {
+      // first court done: draw the whole next round now (everyone counted, fully random)
+      if (!doDraw(false)) { P.finished.pop(); save(); render(); return; }
+      N = latest(); N.revealed = [];
+    }
+    save(); render();
+    letThemDraw(N, freeToDraw(N, P));
+  }
+  function continueDraw() {
+    const N = pendingRound(), P = playingRound();
+    if (N) { letThemDraw(N, freeToDraw(N, P)); return; }
+    // no pending round: everyone is done at once
+    if (P) { P.finished = courtsOf(P).map((c, i) => i + 1); }
+    doDraw(true);
+  }
+
   // What is on each court right now: a full draw sets every court, a single-court draw replaces one.
   function courtBoard() {
     let board = [];
@@ -946,7 +994,7 @@ button:disabled { opacity: .5; cursor: default; }
   // ---------- draw stage (animated reveal) ----------
   const reduce = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let stage = null;
-  function openStage(r) {
+  function openStage(r, only) {
     closeStage(true);
     const BS = bSet(), multi = r.groups.length > 1;
     const slots = [];
@@ -1001,9 +1049,15 @@ button:disabled { opacity: .5; cursor: default; }
     root.appendChild(box); document.body.appendChild(root);
 
     // People draw in roster order so the phone can be passed around; the slip lands on the pre-computed spot.
+    // With `only`, just those people draw now; slips already drawn earlier are shown, the rest stay hidden.
     const { a, b } = lists(), rank = {};
     a.concat(b).forEach((n, i) => (rank[n] = i));
-    const queueList = slots.slice().sort((x, y) => (rank[x.name] ?? 1e9) - (rank[y.name] ?? 1e9));
+    const revealedSet = {}; (only && Array.isArray(r.revealed) ? r.revealed : []).forEach((n) => (revealedSet[n] = 1));
+    const onlySet = only ? Object.fromEntries(only.map((n) => [n, 1])) : null;
+    slots.forEach((x) => { if (revealedSet[x.name]) { x.t.textContent = x.name; x.node.classList.add("filled"); } });
+    const queueList = slots.filter((x) => !revealedSet[x.name] && (!onlySet || onlySet[x.name]))
+      .sort((x, y) => (rank[x.name] ?? 1e9) - (rank[y.name] ?? 1e9));
+    const markDrawn = (x) => { revealedSet[x.name] = 1; if (Array.isArray(r.revealed) && !r.revealed.includes(x.name)) { r.revealed.push(x.name); save(); } };
     const total = queueList.length;
     const S = stage = { root, timers: [], done: false, phase: "hand", cur: null };
     const later = (fn, ms) => { const t = setTimeout(fn, ms); S.timers.push(t); return t; };
@@ -1036,14 +1090,14 @@ button:disabled { opacity: .5; cursor: default; }
       const s = S.cur;
       go.disabled = true; go.textContent = "抽籤中…"; skip.hidden = true; queue.textContent = "";
       lead.textContent = "抽籤中";
-      const labels = queueList.map((x) => x.label);
+      const labels = slots.filter((x) => !revealedSet[x.name]).map((x) => x.label);
       const land = () => {
         tube.classList.remove("shake");
         setNum(s.label, s.rest);
         if (!reduce()) { void num.offsetWidth; num.classList.add("land"); }
         where.textContent = s.rest ? "這輪先休息，下一輪優先上場" : "場地 " + s.court;
         lead.textContent = "抽籤結果";
-        ding(); fill(s, true);
+        ding(); fill(s, true); markDrawn(s);
         s.node.scrollIntoView({ block: "nearest", behavior: reduce() ? "auto" : "smooth" });
         queueList.shift(); upd();
         S.phase = "result";
@@ -1065,8 +1119,9 @@ button:disabled { opacity: .5; cursor: default; }
     }
     function finish() {
       S.done = true; S.phase = "done";
-      lead.textContent = "全部抽完了";
-      nameEl.textContent = "開打！";
+      const left = slots.filter((x) => !revealedSet[x.name]).length;
+      lead.textContent = left ? "場下的人都抽完了" : "全部抽完了";
+      nameEl.textContent = left ? "其他 " + left + " 人打完再抽" : "開打！";
       where.textContent = "";
       show.hidden = true; skip.hidden = true; queue.textContent = ""; all.hidden = true;
       go.disabled = false; go.textContent = "完成"; go.focus();
@@ -1074,7 +1129,7 @@ button:disabled { opacity: .5; cursor: default; }
     }
     function revealAll() {
       S.timers.forEach(clearTimeout); S.timers = []; tube.classList.remove("shake");
-      queueList.splice(0).forEach((s) => fill(s, false));
+      queueList.splice(0).forEach((s) => { fill(s, false); markDrawn(s); });
       ding(); finish();
     }
     go.addEventListener("click", () => {
@@ -1094,6 +1149,7 @@ button:disabled { opacity: .5; cursor: default; }
     stage.timers.forEach(clearTimeout);
     document.removeEventListener("keydown", stage.onKey);
     stage.root.remove(); stage = null;
+    if (!silent) { render(); }
     if (!silent) { $("draw").focus(); window.scrollTo({ top: $("rounds").getBoundingClientRect().top + window.scrollY - 16, behavior: reduce() ? "auto" : "smooth" }); }
   }
 
@@ -1101,10 +1157,11 @@ button:disabled { opacity: .5; cursor: default; }
   function roundText(r) {
     const lines = [roundTitle(r)];
     let court = r.court ? r.court - 1 : 0;
+    const nm = (n) => (isPending(r) && !r.revealed.includes(n) ? "（待抽）" : n);
     r.groups.forEach((g) => {
       if (r.groups.length > 1) lines.push("【" + g.label + "】");
-      g.matches.forEach((m) => { court++; lines.push("場地" + court + "：" + m[0].join("、") + " 對 " + m[1].join("、")); });
-      if (g.bench.length) lines.push("輪空：" + g.bench.join("、"));
+      g.matches.forEach((m) => { court++; lines.push("場地" + court + "：" + m[0].map(nm).join("、") + " 對 " + m[1].map(nm).join("、")); });
+      if (g.bench.length) lines.push("輪空：" + g.bench.map(nm).join("、"));
     });
     return lines.join("\n");
   }
@@ -1155,7 +1212,9 @@ button:disabled { opacity: .5; cursor: default; }
     return d;
   }
 
+  function hiddenEl() { const d = mk("div", "p"); d.appendChild(mk("span", "no", "？")); d.appendChild(mk("span", "t", "待抽")); return d; }
   function renderRound(r, live, BS) {
+    const hid = (n) => isPending(r) && !r.revealed.includes(n);
     const card = mk("div", "round" + (live ? " latest" : ""));
     const h = mk("div", "round-h");
     h.appendChild(mk("h2", "", roundTitle(r) + (r.edited ? "（手動調整過）" : "")));
@@ -1189,12 +1248,12 @@ button:disabled { opacity: .5; cursor: default; }
           pw = mk("span", "meta pw" + (Math.abs(t1 - t2) >= 4 ? " off" : ""), "級數 " + (approx ? "約" : "") + Math.round(t1) + " : " + Math.round(t2));
           pw.title = "兩隊級數合計";
         }
-        sec.appendChild(courtMap("場地 " + court, pw, m.map((team) => team.map((nm) => playerEl(++no, nm, BS[nm], live)))));
+        sec.appendChild(courtMap("場地 " + court, pw, m.map((team) => team.map((nm) => { ++no; return hid(nm) ? hiddenEl() : playerEl(no, nm, BS[nm], live); }))));
       });
       if (g.bench.length || live) {
         const b = mk("div", "bench");
         b.appendChild(document.createTextNode(r.court ? (g.bench.length ? "繼續等待：" : "沒有人在等待") : (g.bench.length ? "本輪輪空：" : "本輪沒有人輪空")));
-        g.bench.forEach((nm) => b.appendChild(playerEl(null, nm, BS[nm], live)));
+        g.bench.forEach((nm) => b.appendChild(hid(nm) ? hiddenEl() : playerEl(null, nm, BS[nm], live)));
         if (live) droppable(b, (src) => dropOnBench(gi, src));
         sec.appendChild(b);
       }
@@ -1207,6 +1266,7 @@ button:disabled { opacity: .5; cursor: default; }
         : "想調整？把人拖到另一個人身上就會互換，拖到輪空區就下場；也可以從上方名單把人拖進來。點兩個人也能互換。"));
       const tools = mk("div", "round-tools"), holder = mk("div"); holder.style.width = "100%";
       const show = mk("button", "small-btn", "重看抽籤過程"); show.type = "button"; show.addEventListener("click", () => openStage(r));
+      if (isPending(r)) show.hidden = true;
       const cp = mk("button", "small-btn", "複製這輪結果"); cp.type = "button"; cp.addEventListener("click", () => copy(roundText(r), holder));
       const del = mk("button", "small-btn", "刪除這輪"); del.type = "button";
       del.addEventListener("click", () => { st.rounds.pop(); selected = null; save(); render(); flash("已刪除第 " + r.no + " 輪"); });
@@ -1217,27 +1277,33 @@ button:disabled { opacity: .5; cursor: default; }
   }
 
   function renderLive() {
-    const board = courtBoard(), box = $("live-list");
-    $("live").hidden = !board.some(Boolean);
+    const P = playingRound(), N = pendingRound(), box = $("live-list");
+    $("live").hidden = !P;
     box.innerHTML = "";
-    const on = {};
-    board.forEach((b, i) => {
-      if (!b) return;
-      b.m.forEach((t) => t.forEach((n) => (on[n] = 1)));
-      const row = mk("div", "live-row");
+    if (!P) return;
+    const fin = finishedOf(P);
+    courtsOf(P).forEach((c, i) => {
+      const row = mk("div", "live-row" + (fin.includes(i + 1) ? " off" : ""));
       const info = mk("div");
-      info.appendChild(mk("div", "lc", "場地 " + (i + 1) + "・第 " + b.no + " 輪抽出" + (st.mode === "sep" && b.label !== "全部" ? "・" + b.label : "")));
-      info.appendChild(mk("div", "lt", b.m[0].join("、") + "　對　" + b.m[1].join("、")));
+      info.appendChild(mk("div", "lc", "場地 " + (i + 1) + "・第 " + P.no + " 輪" + (st.mode === "sep" && c.label !== "全部" ? "・" + c.label : "")));
+      info.appendChild(mk("div", "lt", c.m[0].join("、") + "　對　" + c.m[1].join("、")));
       row.appendChild(info);
-      const bt = mk("button", "small-btn", "打完了，抽下一場"); bt.type = "button";
-      bt.addEventListener("click", () => { audio(); drawCourt(i + 1, true); });
-      row.appendChild(bt);
+      if (fin.includes(i + 1)) row.appendChild(mk("span", "meta", "已打完"));
+      else {
+        const bt = mk("button", "small-btn", N ? "打完了，換他們抽" : "打完了，先抽下一輪"); bt.type = "button";
+        bt.addEventListener("click", () => { audio(); courtFinished(i + 1); });
+        row.appendChild(bt);
+      }
       box.appendChild(row);
     });
-    const { A, B } = present();
-    const waiting = A.concat(B).filter((n) => !on[n]);
-    $("live-wait").textContent = "場邊等待 " + waiting.length + " 人";
-    $("live-waiting").textContent = waiting.length ? "等待中：" + waiting.join("、") : "";
+    if (N) {
+      const left = namesIn(N).filter((n) => !N.revealed.includes(n));
+      $("live-wait").textContent = "第 " + N.no + " 輪已抽 " + N.revealed.length + " / " + namesIn(N).length + " 人";
+      $("live-waiting").textContent = "還沒抽：" + left.join("、");
+    } else {
+      $("live-wait").textContent = "";
+      $("live-waiting").textContent = P.groups.some((g) => g.bench.length) ? "場邊：" + [].concat(...P.groups.map((g) => g.bench)).join("、") : "";
+    }
   }
 
   function renderRounds() {
@@ -1441,7 +1507,7 @@ button:disabled { opacity: .5; cursor: default; }
       cross: "每隊固定一位" + l1 + "搭一位" + l2 + "（例如老手帶新手）。兩組人數對不齊時，多出來的人會另外湊一場或輪空。"
     }[st.mode];
     $("redo").disabled = st.rounds.length === 0;
-    $("draw").textContent = st.rounds.length ? "全部場地一起抽" : "抽下一輪";
+    $("draw").textContent = !st.rounds.length ? "抽下一輪" : pendingRound() ? "繼續抽籤" : "全部打完，抽下一輪";
     renderAtt(); renderLvTable(); renderPairs(); renderRounds(); renderStats();
   }
 
@@ -1491,10 +1557,17 @@ button:disabled { opacity: .5; cursor: default; }
   $("add-a").addEventListener("click", () => addName("a"));
   $("add-b").addEventListener("click", () => addName("b"));
   $("newname").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addName("a"); } });
-  $("draw").addEventListener("click", () => { audio(); doDraw(true); });
+  $("draw").addEventListener("click", () => { audio(); if (!st.rounds.length) doDraw(true); else continueDraw(); });
   $("redo").addEventListener("click", () => {
     if (!st.rounds.length) return;
     const removed = st.rounds.pop();
+    if (Array.isArray(removed.revealed)) {
+      // re-draw a round that is being drawn in two parts: start its draw over
+      if (!doDraw(false)) { st.rounds.push(removed); render(); return; }
+      const N = latest(); N.revealed = []; save(); render();
+      letThemDraw(N, freeToDraw(N, playingRound()));
+      return;
+    }
     const ok = removed.court ? drawCourt(removed.court, true) : doDraw(true);
     if (!ok) { st.rounds.push(removed); render(); }
   });
